@@ -1,0 +1,66 @@
+{
+  "app_name": "ASTRO LIVE",
+  "app_type": "dashboard",
+  "theme": "dark",
+  "emotional_tone": "futuristic, cinematic, cosmic, Apple-level luxury SaaS dashboard",
+  "typography": {
+    "heading_font": "Cabinet Grotesk, Outfit, sans-serif",
+    "body_font": "Inter, system-ui, sans-serif",
+    "mono_font": "JetBrains Mono, monospace"
+  },
+  "colors": {
+    "background": "#05050A",
+    "surface": "#0C0C14",
+    "surface_glass": "rgba(18, 18, 30, 0.75)",
+    "primary": "#8B5CF6",
+    "primary_glow": "rgba(139, 92, 246, 0.35)",
+    "accent_cyan": "#00F0FF",
+    "accent_magenta": "#F43F5E",
+    "text_main": "#F8FAFC",
+    "text_muted": "#94A3B8",
+    "border": "rgba(148, 163, 184, 0.12)"
+  },
+  "visual_enhancers": {
+    "glassmorphism": "backdrop-blur-2xl bg-[#0c0c14]/80 border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.37)]",
+    "tracing_beam": "relative overflow-hidden before:absolute before:inset-0 before:p-[1px] before:bg-gradient-to-r before:from-violet-500 before:via-cyan-400 before:to-fuchsia-500 before:rounded-xl before:content-['']",
+    "glow_effects": "drop-shadow-[0_0_20px_rgba(139,92,246,0.3)]"
+  },
+  "layouts": {
+    "sidebar": "fixed left-0 top-0 h-screen w-64 border-r border-white/10 bg-[#070710]/90 backdrop-blur-xl z-40 flex flex-col justify-between p-6",
+    "topbar": "sticky top-0 z-30 h-20 border-b border-white/10 bg-[#05050A]/80 backdrop-blur-xl px-8 flex items-center justify-between",
+    "main_container": "pl-64 pt-20 min-h-screen bg-[#05050A] text-slate-100 p-8"
+  },
+  "image_urls": {
+    "cosmic_nebula": "https://images.unsplash.com/photo-1462332420958-a05d1e002413?q=85&fm=jpg&crop=entropy",
+    "galaxy_deep": "https://images.unsplash.com/photo-1502134249126-9f3755a50d78?q=85&fm=jpg&crop=entropy",
+    "astrologer_1": "https://images.unsplash.com/photo-1762795297387-b0b88a635aa6?q=85&fm=jpg&crop=entropy",
+    "astrologer_2": "https://images.unsplash.com/photo-1762838346474-b32aee122d23?q=85&fm=jpg&crop=entropy",
+    "astrologer_3": "https://images.unsplash.com/photo-1686464907994-3a9789d27178?q=85&fm=jpg&crop=entropy",
+    "futuristic_interface": "https://images.unsplash.com/photo-1720962158937-7ea890052166?q=85&fm=jpg&crop=entropy"
+  },
+  "components": [
+    "Sidebar",
+    "TopNavbar",
+    "CinematicHero",
+    "CosmicPlanetVisual",
+    "LiveSessionCard",
+    "StatCards",
+    "ThreeColumnContentArea",
+    "MobileBottomNav",
+    "LiveConsultationModal",
+    "ChatInterface",
+    "DailyHoroscopeWidget"
+  ],
+  "accessibility_and_testing": {
+    "mandatory_data_testid": true,
+    "apca_contrast_compliant": true,
+    "reduced_motion_supported": true
+  },
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "Do not use pure black #000000 or full transparent backgrounds on overlays",
+    "Ensure all interactive buttons have explicit hover states with text and background color contrasts",
+    "Use data-testid attributes on all interactive and key informational elements",
+    "Use Sonner for toast notifications",
+    "Keep H1 text within text-4xl to text-6xl ceiling with tight letter spacing"
+  ]
+}
