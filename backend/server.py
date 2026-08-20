@@ -1,19 +1,24 @@
 from fastapi import FastAPI, APIRouter, Request, Response, HTTPException
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
+import base64
+import hashlib
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
 import uuid
 import requests
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+_google_key_check = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+print(f"[startup] Google/Gemini API key detected: {bool(_google_key_check)} (length: {len(_google_key_check) if _google_key_check else 0})")
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -142,6 +147,95 @@ ASTROLOGERS = [
     {"id": "sunita-sharma", "name": "Sunita Sharma", "specialty": "Tarot Reader", "rating": "4.8", "status": "Online", "image": "https://images.unsplash.com/photo-1762838346474-b32aee122d23?q=85&fm=jpg&crop=entropy"},
     {"id": "dr-anirudh", "name": "Dr. Anirudh", "specialty": "KP Astrology", "rating": "5.0", "status": "Online", "image": "https://images.unsplash.com/photo-1686464907994-3a9789d27178?q=85&fm=jpg&crop=entropy"},
 ]
+
+ART_DIR = ROOT_DIR / "generated_art"
+ART_DIR.mkdir(exist_ok=True)
+
+class ArtRequest(BaseModel):
+    sign: str
+    prompt: str
+
+async def _generate_art_with_pollinations(prompt: str) -> bytes:
+    import urllib.parse
+    encoded_prompt = urllib.parse.quote(prompt[:800])
+    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+    params = {"width": 1024, "height": 1024, "nologo": "true", "model": "flux"}
+    resp = requests.get(url, params=params, timeout=90)
+    if not resp.ok:
+        logging.error(f"Pollinations API error (status {resp.status_code}): {resp.text[:500]}")
+    resp.raise_for_status()
+    content_type = resp.headers.get("content-type", "")
+    if "image" not in content_type or len(resp.content) < 1000:
+        raise HTTPException(status_code=502, detail="Pollinations did not return a valid image")
+    return resp.content
+
+async def _generate_art_with_google_key(api_key: str, prompt: str) -> bytes:
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={api_key}"
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    resp = requests.post(url, json=payload, timeout=60)
+    if not resp.ok:
+        logging.error(f"Gemini API error (status {resp.status_code}): {resp.text}")
+    resp.raise_for_status()
+    data = resp.json()
+    parts = (data.get("candidates") or [{}])[0].get("content", {}).get("parts", [])
+    for part in parts:
+        inline = part.get("inlineData") or part.get("inline_data")
+        if inline and inline.get("data"):
+            return base64.b64decode(inline["data"])
+    raise HTTPException(status_code=502, detail="No image returned from the art generator")
+
+async def _generate_art_with_emergent(api_key: str, cache_key: str, prompt: str) -> bytes:
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    chat = LlmChat(api_key=api_key, session_id=f"horoscope-art-{cache_key}", system_message="You are an expert cosmic illustrator creating astrology art.")
+    chat.with_model("gemini", "gemini-3.1-flash-image-preview").with_params(modalities=["image", "text"])
+    _, images = await chat.send_message_multimodal_response(UserMessage(text=prompt))
+    if not images:
+        raise HTTPException(status_code=502, detail="No image returned from the art generator")
+    return base64.b64decode(images[0]["data"])
+
+@api_router.post("/horoscope/art")
+async def generate_horoscope_art(input: ArtRequest):
+    cache_key = hashlib.sha256(f"{date.today().isoformat()}|{input.sign}|{input.prompt}".encode()).hexdigest()[:20]
+    file_path = ART_DIR / f"{cache_key}.png"
+    if file_path.exists():
+        return {"image_url": f"/api/horoscope/art/{cache_key}.png", "cached": True}
+
+    full_prompt = (
+        f"{input.prompt} Cinematic 3D render, hyper-detailed, premium futuristic astrology aesthetic, "
+        "deep space dark background, no text, no watermark, no logos, no UI elements, no people faces, "
+        "centered composition, elegant cosmic glow."
+    )
+    google_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    emergent_key = os.environ.get("EMERGENT_LLM_KEY")
+
+    image_bytes = None
+    try:
+        image_bytes = await _generate_art_with_pollinations(full_prompt)
+    except Exception:
+        logging.exception("Pollinations generation failed, trying fallback")
+        try:
+            if google_key:
+                image_bytes = await _generate_art_with_google_key(google_key, full_prompt)
+            elif emergent_key:
+                image_bytes = await _generate_art_with_emergent(emergent_key, cache_key, full_prompt)
+        except HTTPException:
+            raise
+        except Exception:
+            logging.exception("Horoscope art generation failed")
+
+    if not image_bytes:
+        raise HTTPException(status_code=502, detail="Could not generate cosmic art right now")
+
+    file_path.write_bytes(image_bytes)
+    return {"image_url": f"/api/horoscope/art/{cache_key}.png", "cached": False}
+
+@api_router.get("/horoscope/art/{filename}")
+async def get_horoscope_art(filename: str):
+    file_path = ART_DIR / filename
+    if not file_path.exists() or not filename.endswith(".png"):
+        raise HTTPException(status_code=404, detail="Art not found")
+    return Response(content=file_path.read_bytes(), media_type="image/png")
+
 
 @api_router.get("/sessions", response_model=List[LiveSession])
 async def get_sessions():
