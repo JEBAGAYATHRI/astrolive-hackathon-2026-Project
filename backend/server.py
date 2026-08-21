@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
 import uuid
 import requests
-from datetime import datetime, timezone, timedelta, date
+from datetime import datetime, timezone, date
 
 
 ROOT_DIR = Path(__file__).parent
@@ -71,72 +71,10 @@ class SavedReading(SavedReadingCreate):
     id: str
     created_at: datetime
 
-class User(BaseModel):
-    user_id: str
-    email: str
-    name: str
-    picture: Optional[str] = None
-
-class AuthCallback(BaseModel):
-    session_id: str
-
 # Add your routes to the router instead of directly to app
 @api_router.get("/")
 async def root():
     return {"message": "Hello World"}
-
-async def current_user(request: Request):
-    token = request.cookies.get("session_token")
-    if not token:
-        auth = request.headers.get("Authorization", "")
-        token = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else None
-    if not token:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
-    if not session:
-        raise HTTPException(status_code=401, detail="Session not found")
-    expires_at = session.get("expires_at")
-    if isinstance(expires_at, str):
-        expires_at = datetime.fromisoformat(expires_at)
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at < datetime.now(timezone.utc):
-        await db.user_sessions.delete_one({"session_token": token})
-        raise HTTPException(status_code=401, detail="Session expired")
-    user = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    return user, token
-
-@api_router.post("/auth/session")
-async def exchange_session(input: AuthCallback, response: Response):
-    result = requests.get("https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data", headers={"X-Session-ID": input.session_id}, timeout=15)
-    if result.status_code != 200:
-        raise HTTPException(status_code=401, detail="OAuth session could not be verified")
-    data = result.json()
-    user = await db.users.find_one({"email": data["email"]}, {"_id": 0})
-    if not user:
-        user = {"user_id": f"user_{uuid.uuid4().hex[:12]}", "email": data["email"], "name": data.get("name") or data["email"], "picture": data.get("picture")}
-        await db.users.insert_one(user.copy())
-    else:
-        await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"name": data.get("name") or user["name"], "picture": data.get("picture") or user.get("picture")}})
-        user = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
-    expires = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=7)
-    await db.user_sessions.insert_one({"user_id": user["user_id"], "session_token": data["session_token"], "expires_at": expires.isoformat(), "created_at": datetime.now(timezone.utc).isoformat()})
-    response.set_cookie("session_token", data["session_token"], httponly=True, secure=True, samesite="none", path="/", max_age=604800)
-    return user
-
-@api_router.get("/auth/me", response_model=User)
-async def auth_me(request: Request):
-    user, _ = await current_user(request)
-    return user
-
-@api_router.post("/auth/logout")
-async def auth_logout(request: Request, response: Response):
-    _, token = await current_user(request)
-    await db.user_sessions.delete_one({"session_token": token})
-    response.delete_cookie("session_token", path="/")
-    return {"ok": True}
 
 SESSIONS = [
     {"id": "mars-transit", "title": "MARS TRANSIT 2024", "subtitle": "What it means for you?", "astrologer": "Acharya Dev", "watchers": "1.2K", "status": "LIVE", "image": "https://images.unsplash.com/photo-1462332420958-a05d1e002413?q=85&fm=jpg&crop=entropy"},
@@ -184,15 +122,6 @@ async def _generate_art_with_google_key(api_key: str, prompt: str) -> bytes:
             return base64.b64decode(inline["data"])
     raise HTTPException(status_code=502, detail="No image returned from the art generator")
 
-async def _generate_art_with_emergent(api_key: str, cache_key: str, prompt: str) -> bytes:
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
-    chat = LlmChat(api_key=api_key, session_id=f"horoscope-art-{cache_key}", system_message="You are an expert cosmic illustrator creating astrology art.")
-    chat.with_model("gemini", "gemini-3.1-flash-image-preview").with_params(modalities=["image", "text"])
-    _, images = await chat.send_message_multimodal_response(UserMessage(text=prompt))
-    if not images:
-        raise HTTPException(status_code=502, detail="No image returned from the art generator")
-    return base64.b64decode(images[0]["data"])
-
 @api_router.post("/horoscope/art")
 async def generate_horoscope_art(input: ArtRequest):
     cache_key = hashlib.sha256(f"{date.today().isoformat()}|{input.sign}|{input.prompt}".encode()).hexdigest()[:20]
@@ -206,7 +135,6 @@ async def generate_horoscope_art(input: ArtRequest):
         "centered composition, elegant cosmic glow."
     )
     google_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-    emergent_key = os.environ.get("EMERGENT_LLM_KEY")
 
     image_bytes = None
     try:
@@ -216,8 +144,6 @@ async def generate_horoscope_art(input: ArtRequest):
         try:
             if google_key:
                 image_bytes = await _generate_art_with_google_key(google_key, full_prompt)
-            elif emergent_key:
-                image_bytes = await _generate_art_with_emergent(emergent_key, cache_key, full_prompt)
         except HTTPException:
             raise
         except Exception:
@@ -246,19 +172,16 @@ async def get_astrologers():
     return ASTROLOGERS
 
 @api_router.post("/saved-readings", response_model=SavedReading)
-async def save_reading(input: SavedReadingCreate, request: Request):
-    user, _ = await current_user(request)
+async def save_reading(input: SavedReadingCreate):
     reading = SavedReading(id=str(uuid.uuid4()), created_at=datetime.now(timezone.utc), **input.model_dump())
     doc = reading.model_dump()
     doc["created_at"] = reading.created_at.isoformat()
-    doc["user_id"] = user["user_id"]
     await db.saved_readings.insert_one(doc)
     return reading
 
 @api_router.get("/saved-readings", response_model=List[SavedReading])
-async def get_saved_readings(request: Request):
-    user, _ = await current_user(request)
-    readings = await db.saved_readings.find({"user_id": user["user_id"]}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(50)
+async def get_saved_readings():
+    readings = await db.saved_readings.find({}, {"_id": 0}).sort("created_at", -1).to_list(50)
     for reading in readings:
         if isinstance(reading.get("created_at"), str):
             reading["created_at"] = datetime.fromisoformat(reading["created_at"])
@@ -269,7 +192,6 @@ async def create_status_check(input: StatusCheckCreate):
     status_dict = input.model_dump()
     status_obj = StatusCheck(**status_dict)
     
-    # Convert to dict and serialize datetime to ISO string for MongoDB
     doc = status_obj.model_dump()
     doc['timestamp'] = doc['timestamp'].isoformat()
     
@@ -278,10 +200,8 @@ async def create_status_check(input: StatusCheckCreate):
 
 @api_router.get("/status", response_model=List[StatusCheck])
 async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
     status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
     
-    # Convert ISO string timestamps back to datetime objects
     for check in status_checks:
         if isinstance(check['timestamp'], str):
             check['timestamp'] = datetime.fromisoformat(check['timestamp'])
